@@ -1,0 +1,697 @@
+<!--探讨WEBGL中不同图形的绘制方法:[待测试2017.11.6]-->
+<!DOCTYPE HTML>
+<html lang="en">
+<head>
+    <title>WEBGL高级编程----纹理贴图实战</title>
+    <meta charset="utf-8">
+    <!--顶点着色器-->
+    <script id="shader-vs" type="x-shader/x-vertex">
+      attribute vec3 aVertexPosition;
+      attribute vec2 aTextureCoordinates;
+
+      uniform mat4 uMVMatrix;
+      uniform mat4 uPMatrix;
+
+      varying vec2 vTextureCoordinates;
+
+      void main() {
+        vTextureCoordinates = aTextureCoordinates;
+        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+      }
+
+    </script>
+
+    <!--片元着色器-->
+    <script id="shader-fs" type="x-shader/x-fragment">
+      precision mediump float;
+
+      varying vec2 vTextureCoordinates;
+      uniform sampler2D uSampler;
+      void main() {
+        gl_FragColor = texture2D(uSampler, vTextureCoordinates);
+      }
+
+    </script>
+
+    <!--引入我的库文件-->
+    <script src="./lib/webgl-debug.js"></script>
+    <script src="./lib/glMatrix.js"></script>
+    <script src="./lib/webgl-utils.js"></script>
+
+    <script type="text/javascript">
+        //定义需要的全局变量
+        var gl;
+        var pwgl = {};
+        //获取上下文的状态（防止上下文丢失）
+        pwgl.ongoingImageLoads = [];
+        var canvas;
+
+        //创建我的上下文句柄
+        function createGLContext(canvas) {
+            var names = ["webgl", "experimental-webgl"];
+            var context = null;
+            for (var i = 0; i < names.length; i++) {
+                try {
+                    context = canvas.getContext(names[i]);
+                } catch (e) {
+                }
+                if (context) {
+                    break;
+                }
+            }
+            if (context) {
+                context.viewportWidth = canvas.width;
+                context.viewportHeight = canvas.height;
+            } else {
+                alert("Failed to create WebGL context!");
+            }
+            return context;
+        }
+
+        //从JavaScript代码中通过DOM加载着色器
+        function loadShaderFromDOM(id) {
+            var shaderScript = document.getElementById(id);
+
+            // If we don't find an element with the specified id
+            // we do an early exit
+            if (!shaderScript) {
+                return null;
+            }
+
+            // Loop through the children for the found DOM element and
+            // build up the shader source code as a string
+            var shaderSource = "";
+            var currentChild = shaderScript.firstChild;
+            while (currentChild) {
+                if (currentChild.nodeType == 3) { // 3 corresponds to TEXT_NODE
+                    shaderSource += currentChild.textContent;
+                }
+                currentChild = currentChild.nextSibling;
+            }
+
+            var shader;
+            if (shaderScript.type == "x-shader/x-fragment") {
+                shader = gl.createShader(gl.FRAGMENT_SHADER);
+            } else if (shaderScript.type == "x-shader/x-vertex") {
+                shader = gl.createShader(gl.VERTEX_SHADER);
+            } else {
+                return null;
+            }
+
+            gl.shaderSource(shader, shaderSource);
+            gl.compileShader(shader);
+
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                alert(gl.getShaderInfoLog(shader));
+                return null;
+            }
+            return shader;
+        }
+
+        //设置我的着色器（完成着色器的部分初始化操作）
+        function setupShaders() {
+            var vertexShader = loadShaderFromDOM("shader-vs");
+            var fragmentShader = loadShaderFromDOM("shader-fs");
+
+            shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, vertexShader);
+            gl.attachShader(shaderProgram, fragmentShader);
+            gl.linkProgram(shaderProgram);
+
+            if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+                alert("Failed to setup shaders");
+            }
+
+            gl.useProgram(shaderProgram);
+
+            //获取顶点的位置和纹理坐标的存储地址
+            pwgl.vertexPositionAttributeLoc = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+            pwgl.vertexTextureAttributeLoc = gl.getAttribLocation(shaderProgram, "aTextureCoordinates");
+
+            //回去模型视图矩阵的存储地址
+            pwgl.uniformMVMatrixLoc = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+            pwgl.uniformProjMatrixLoc = gl.getUniformLocation(shaderProgram, "uPMatrix");
+            pwgl.uniformSamplerLocLoc = gl.getUniformLocation(shaderProgram, "uSampler");
+
+            //开启该方法之后， 表示就可以通过数组等方式向顶点着色器中传入数据(顶点位置坐标， 纹理坐标)
+            gl.enableVertexAttribArray(pwgl.vertexPositionAttribute);
+            gl.enableVertexAttribArray(pwgl.vertexTextureAttributeLoc);
+
+            //开始创建我的模型视图矩阵
+            pwgl.modelViewMatrix = mat4.create();
+            pwgl.projectionMatrix = mat4.create();
+            pwgl.modelViewMatrixStack = [];
+        }
+
+        //定义两个辅助函数(矩阵的入栈和出栈操作)
+        function pushModelViewMatrix() {
+            //把当前的模型视图矩阵存储在一个JavaScript数组中去
+            var copyToPush = mat4.create(pwgl.modelViewMatrix);
+            pwgl.modelViewMatrixStack.push(copyToPush);
+        }
+
+        function popModelViewMatrix() {
+            if (pwgl.modelViewMatrixStack.length == 0) {
+                throw "Error popModelViewMatrix() - Stack was empty";
+            }
+            //把我自己保存的模型视图矩阵弹出去
+            pwgl.modelViewMatrix = pwgl.modelViewMatrixStack.pop();
+        }
+
+        //处理物体运动的一些基本参数
+        var xRot = 0;
+        var xSpeed = 3;
+
+        var yRot = 0;
+        var ySpeed = -3;
+
+        var z = -5.0;
+
+
+        //可以处理多个按键同时按下的情形
+        var currentlyPressedKeys = {};
+        function handleKeyDown(event) {
+            currentlyPressedKeys[event.keyCode] = true;
+        }
+        function handleKeyUp(event) {
+            currentlyPressedKeys[event.keyCode] = false;
+        }
+
+
+        //根据不同的按键做出不同的反应
+        function handleKeys() {
+            if (currentlyPressedKeys[33]) {
+                // Page Up
+                z -= 0.05;
+            }
+            if (currentlyPressedKeys[34]) {
+                // Page Down
+                z += 0.05;
+            }
+            if (currentlyPressedKeys[37]) {
+                // Left cursor key
+                ySpeed -= 1;
+            }
+            if (currentlyPressedKeys[39]) {
+                // Right cursor key
+                ySpeed += 1;
+            }
+            if (currentlyPressedKeys[38]) {
+                // Up cursor key
+                xSpeed -= 1;
+            }
+            if (currentlyPressedKeys[40]) {
+                // Down cursor key
+                xSpeed += 1;
+            }
+        }
+
+        //地板的顶点位置参数
+        function setupFloorBuffers() {
+            /****第一步****/
+            //1.创建地板顶点缓冲区
+            pwgl.floorVertexPositionBuffer = gl.createBuffer();
+            //2.绑定缓冲区到目标对象
+            gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.floorVertexPositionBuffer);
+            var floorVertexPosition = [
+                // Plane in y=0
+                5.0,   0.0,  5.0,  //v0
+                5.0,   0.0, -5.0,  //v1
+                -5.0,   0.0, -5.0,  //v2
+                -5.0,   0.0,  5.0   //v3
+            ];
+            //3.向缓冲区对象中写入数据
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(floorVertexPosition), gl.STATIC_DRAW);
+
+            pwgl.FLOOR_VERTEX_POS_BUF_ITEM_SIZE = 3;
+            pwgl.FLOOR_VERTEX_POS_BUF_NUM_ITEMS = 4;
+
+
+
+            //初始化我的地板的纹理坐标
+            //1.创建地板纹理坐标缓冲区
+            pwgl.floorVertexTextureCoordinateBuffer = gl.createBuffer();
+            //2.绑定地板纹理缓冲区到目标对象
+            gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.floorVertexTextureCoordinateBuffer);
+            var floorVertexTextureCoordinates = [
+                2.0, 0.0,
+                2.0, 2.0,
+                0.0, 2.0,
+                0.0, 0.0
+            ];
+
+            //3.地板纹理缓冲区对象中写入数据
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(floorVertexTextureCoordinates),
+                gl.STATIC_DRAW);
+
+            //设置我的地板纹理坐标分量大小
+            //pwgl.FLOOR_VERTEX_TEX_COORD_BUF_ITEM_SIZE = 2;//error
+            pwgl.FLOOR_VERTEX_TEX_COORD_BUF_ITEM_SIZE = 2;
+            pwgl.FLOOR_VERTEX_TEX_COORD_BUF_NUM_ITEMS = 4;
+
+
+
+            /****第二步***/
+            //1.创建地板顶点索引缓冲区.
+            pwgl.floorVertexIndexBuffer = gl.createBuffer();
+            //2.绑定缓冲区到目标对象
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, pwgl.floorVertexIndexBuffer);
+            var floorVertexIndices = [
+                0, 1, 2, 3
+            ];
+            //3.向缓冲区对象中写入数据(16为无符号整型数字)
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(floorVertexIndices), gl.STATIC_DRAW);
+
+            pwgl.FLOOR_VERTEX_INDEX_BUF_ITEM_SIZE = 1;
+            pwgl.FLOOR_VERTEX_INDEX_BUF_NUM_ITEMS = 4;
+        }
+
+        //立方体的顶点位置参数
+        function setupCubeBuffers() {
+            /*****立方体的顶点位置*****/
+            //1.创建立方体的顶点缓冲区
+            pwgl.cubeVertexPositionBuffer = gl.createBuffer();
+            //2.绑定缓冲区到目标对象
+            gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.cubeVertexPositionBuffer);
+            var cubeVertexPosition = [
+                // Front face
+                1.0,  1.0,  1.0, //v0
+                -1.0,  1.0,  1.0, //v1
+                -1.0, -1.0,  1.0, //v2
+                1.0, -1.0,  1.0, //v3
+
+                // Back face
+                1.0,  1.0, -1.0, //v4
+                -1.0,  1.0, -1.0, //v5
+                -1.0, -1.0, -1.0, //v6
+                1.0, -1.0, -1.0, //v7
+
+                // Left face
+                -1.0,  1.0,  1.0, //v8
+                -1.0,  1.0, -1.0, //v9
+                -1.0, -1.0, -1.0, //v10
+                -1.0, -1.0,  1.0, //v11
+
+                // Right face
+                1.0,  1.0,  1.0, //12
+                1.0, -1.0,  1.0, //13
+                1.0, -1.0, -1.0, //14
+                1.0,  1.0, -1.0, //15
+
+                // Top face
+                1.0,  1.0,  1.0, //v16
+                1.0,  1.0, -1.0, //v17
+                -1.0,  1.0, -1.0, //v18
+                -1.0,  1.0,  1.0, //v19
+
+                // Bottom face
+                1.0, -1.0,  1.0, //v20
+                1.0, -1.0, -1.0, //v21
+                -1.0, -1.0, -1.0, //v22
+                -1.0, -1.0,  1.0, //v23
+            ];
+            //3.向缓冲区对象中写入数据
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cubeVertexPosition), gl.STATIC_DRAW);
+
+            //错误提示：Uncaught TypeError: Cannot read property 'toString' of undefined！
+            /*cubeVertexPosition.itemSize = 3;
+             cubeVertexPosition.numberOfItems = 24;*/
+            /*
+            * 【经验话语】：如果控制台提示toString()类型的错误，多半原因是由于调用该函数的语句中的某一个变量没有正确定义，或者没有正确初始化操作
+            * 【解决方案】：通常检查出错语句中的变量，是否正确赋值！
+            * */
+            pwgl.CUBE_VERTEX_POS_BUF_ITEM_SIZE = 3;
+            pwgl.CUBE_VERTEX_POS_BUF_NUM_ITEMS = 24;
+
+
+            /*****立方体的顶点位置索引信息****/
+            //1.创建立方体顶点位置索引缓冲区
+            pwgl.cubeVertexIndexBuffer = gl.createBuffer();
+            //2.绑定缓冲区到目标对象
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, pwgl.cubeVertexIndexBuffer);
+            var cubeVertexIndices = [
+                0, 1, 2,      0, 2, 3,    // Front face
+                4, 6, 5,      4, 7, 6,    // Back face
+                8, 9, 10,     8, 10, 11,  // Left face
+                12, 13, 14,   12, 14, 15, // Right face
+                16, 17, 18,   16, 18, 19, // Top face
+                20, 22, 21,   20, 23, 22  // Bottom face
+            ];
+            //3.向缓冲区对象中写入数据
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(cubeVertexIndices), gl.STATIC_DRAW);
+
+            //索引之间互相独立， 共计有36个索引点的信息
+            pwgl.CUBE_VERTEX_INDEX_BUF_ITEM_SIZE = 1;
+            pwgl.CUBE_VERTEX_INDEX_BUF_NUM_ITEMS = 36;
+
+
+            //创建我的立方体的纹理坐标
+            //1.建立立方体纹理坐标缓冲区
+            pwgl.cubeVertexTextureCoordinateBuffer = gl.createBuffer();
+            //2.绑定纹理坐标顶点缓冲区到目标对象
+            gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.cubeVertexTextureCoordinateBuffer);
+            var textureCoordinates = [
+                //Front face
+                0.0, 0.0, //v0
+                1.0, 0.0, //v1
+                1.0, 1.0, //v2
+                0.0, 1.0, //v3
+
+                // Back face
+                0.0, 1.0, //v4
+                1.0, 1.0, //v5
+                1.0, 0.0, //v6
+                0.0, 0.0, //v7
+
+                // Left face
+                0.0, 1.0, //v8
+                1.0, 1.0, //v9
+                1.0, 0.0, //v10
+                0.0, 0.0, //v11
+
+                // Right face
+                0.0, 1.0, //v12
+                1.0, 1.0, //v13
+                1.0, 0.0, //v14
+                0.0, 0.0, //v15
+
+                // Top face
+                0.0, 1.0, //v16
+                1.0, 1.0, //v17
+                1.0, 0.0, //v18
+                0.0, 0.0, //v19
+
+                // Bottom face
+                0.0, 1.0, //v20
+                1.0, 1.0, //v21
+                1.0, 0.0, //v22
+                0.0, 0.0, //v23
+            ];
+            //3.向立方体纹理坐标顶点缓冲区中写入数据
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoordinates), gl.STATIC_DRAW);
+
+            pwgl.CUBE_VERTEX_TEX_COORD_BUF_ITEM_SIZE = 2;
+            pwgl.CUBE_VERTEX_TEX_COORD_BUF_NUM_ITEMS = 24;
+        }
+
+
+        //本地图片加载完成之后，需要设置的一系列纹理图片的参数
+        function textureFinishedLoading(image, texture) {
+            //绑定纹理对象到2D纹理（将这个纹理对象绑定为当前的纹理）
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            //修正图片的坐标（绕着水平轴旋转）
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+
+            //把当前对象的纹理数据上传到GPU
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+            gl.generateMipmap(gl.TEXTURE_2D);
+
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+
+            /*gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);*/
+            gl.bindTexture(gl.TEXTURE_2D, null);
+        }
+
+        //从本地加载图片文件，把这个图片准备变为一张WEBGL纹理图片
+        function loadImageForTexture(url, texture) {
+            //新建一个JavaScript的图片DOM对象
+            var image = new Image();
+            //图像载入完成之后就会触发这个函数
+            image.onload = function () {
+                pwgl.ongoingImageLoads.slice(pwgl.ongoingImageLoads.indexOf(image), 1);
+                textureFinishedLoading(image,texture);
+            }
+           pwgl.ongoingImageLoads.push(image);
+            image.src = url;
+        }
+
+        //设置图片纹理缓冲区
+        function setupTextures() {
+            //创建一个纹理对象
+            //木质纹理
+            pwgl.woodTexture = gl.createTexture();
+            //把一个本地图片真正变为纹理
+            loadImageForTexture("./resources/wood_128x128.jpg", pwgl.woodTexture);
+
+            // 地板纹理
+            pwgl.groundTexture = gl.createTexture();
+            loadImageForTexture("./resources/wood_floor_256.jpg", pwgl.groundTexture);
+
+            // 桌子的纹理
+            pwgl.boxTexture = gl.createTexture();
+            loadImageForTexture("./resources/wicker_256.jpg", pwgl.boxTexture);
+        }
+
+
+        //设置我的缓冲区
+        function setupBuffers() {
+            //设置缓冲区分解为两个部分
+            //1.设置地板的顶点缓冲区
+            setupFloorBuffers();
+            //2.设置立方体的顶点缓冲区
+            setupCubeBuffers();
+        }
+
+        //把我的模型视图矩阵传给顶点着色器
+        function uploadModelViewMatrixToShader() {
+            gl.uniformMatrix4fv(shaderProgram.uniformMVMatrix, false, pwgl.modelViewMatrix);
+        }
+        //把我的投影矩阵传给顶点着色器
+        function uploadProjectionMatrixToShader() {
+            gl.uniformMatrix4fv(shaderProgram.uniformProjMatrix, false, pwgl.projectionMatrix);
+        }
+
+
+        //绘制地板
+        function drawFloor() {
+            //开始绘制
+            // //1.(先把地板顶点位置信息传给顶点着色器)
+            gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.floorVertexPositionBuffer);
+            gl.vertexAttribPointer(pwgl.vertexPositionAttributeLoc,
+                                    pwgl.FLOOR_VERTEX_POS_BUF_ITEM_SIZE,
+                                    gl.FLOAT, false, 0, 0);
+
+            //2.把我的地板的纹理坐标传给顶点着色器
+            gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.floorVertexTextureCoordinateBuffer);
+            gl.vertexAttribPointer(pwgl.vertexTextureAttributeLoc,
+                                    pwgl.FLOOR_VERTEX_POS_BUF_ITEM_SIZE,
+                                    gl.FLOAT, false, 0, 0);
+
+            //激活我的纹理坐标
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, pwgl.groundTexture);
+
+            //利用顶点索引信息开始绘图
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, pwgl.floorVertexIndexBuffer);
+            gl.drawElements(gl.TRIANGLE_FAN, pwgl.FLOOR_VERTEX_INDEX_BUF_NUM_ITEMS, gl.UNSIGNED_SHORT, 0);
+        }
+
+        //绘制立方体(把立方体的纹理坐标传进来就够了)
+        function drawCube(texture) {
+            //1.立方体的顶点坐标
+            gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.cubeVertexPositionBuffer);
+            gl.vertexAttribPointer(pwgl.vertexTextureAttributeLoc,
+                                    pwgl.FLOOR_VERTEX_POS_BUF_ITEM_SIZE,
+                                    gl.FLOAT, false, 0, 0);
+
+            //2.传递我的立方体纹理坐标
+            gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.cubeVertexTextureCoordinateBuffer);
+            gl.vertexAttribPointer(pwgl.vertexTextureAttributeLoc,
+                                    pwgl.CUBE_VERTEX_TEX_COORD_BUF_ITEM_SIZE,
+                                    gl.FLOAT, false, 0, 0);
+
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+
+            //开始利用索引坐标绘制立方体
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, pwgl.cubeVertexIndexBuffer);
+            gl.drawElements(gl.TRIANGLES, pwgl.CUBE_VERTEX_INDEX_BUF_ITEM_SIZE,
+                gl.UNSIGNED_SHORT, 0);
+
+        }
+
+
+        //绘制卓子
+        function drawTable() {
+            //绘制之前先保存当前的模型视图矩阵
+            pushModelViewMatrix();//最初的模型视图矩阵
+            //alert(modelViewMatrixStack.length); 此时这里面存放了两个模型视图矩阵
+            //向上移动1个单位
+            mat4.translate(pwgl.modelViewMatrix, [0.0, 1.0, 0.0], pwgl.modelViewMatrix);
+            //开始缩放
+            mat4.scale(pwgl.modelViewMatrix, [2.0, 0.1, 2.0], pwgl.modelViewMatrix);
+            //把平移并且缩放后的矩阵（此时的模型视图矩阵）传到顶点着色器
+            uploadModelViewMatrixToShader();
+
+            //开始绘制立方体(主要是把立方体的顶点位置传给顶点着色器，然后顶点着色器就会对这个顶点位置向量进行矩阵变换)
+            drawCube(pwgl.woodTexture);
+            popModelViewMatrix();
+
+            //绘制桌子腿
+            for (var i=-1; i<=1; i+=2) {
+                for (var j= -1; j<=1; j+=2) {
+                    pushModelViewMatrix();
+                    mat4.translate(pwgl.modelViewMatrix, [i*1.9, -0.1, j*1.9], pwgl.modelViewMatrix);
+                    mat4.scale(pwgl.modelViewMatrix, [0.1, 1.0, 0.1], pwgl.modelViewMatrix);
+                    uploadModelViewMatrixToShader();
+                    //绘制立方体（会把立方体的顶点坐标，进行矩阵变换）
+                    drawCube(pwgl.woodTexture); // argument sets brown color
+                    popModelViewMatrix();
+                }
+            }
+        }
+
+        //绘图函数
+        function draw() {
+            //设置视口，清空深度缓存(左下角坐标， 宽度， 高度)
+            gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+
+            //设置我的透视投影矩阵
+            mat4.perspective(60, gl.viewportWidth/gl.viewportHeight, 0.1, 100, pwgl.projectionMatrix);
+            //重置模型视图矩阵
+            mat4.identity(pwgl.modelViewMatrix);
+            mat4.lookAt([8, 5, -10], [0, 0, 0], [0, 1, 0], pwgl.modelViewMatrix);
+
+            //在这里设置转动整个场景
+            mat4.translate(pwgl.modelViewMatrix, [0, 0, z], pwgl.modelViewMatrix);
+            mat4.rotateY(pwgl.modelViewMatrix, yRot, pwgl.modelViewMatrix);
+
+            //把当前的模型视图投影矩阵传递给顶点着色器(到这里顶点的坐标已经转换为了裁剪坐标系)
+            uploadModelViewMatrixToShader();
+            uploadProjectionMatrixToShader();
+
+            //开始设置取样器的参数
+            gl.uniform1i(pwgl.uniformSamplerLocLoc, 0);
+
+            //开始绘制地板
+            drawFloor();
+
+            //绘制桌子
+            //绘制之前先把我当前的WEBGL坐标系统的矩阵保存起来【相当于是桌子腿的最下面位置】
+            pushModelViewMatrix();
+            //此时物体的坐标系到达桌子的最上表面(注意物体自身的坐标系和WEBGL坐标系的区别)
+            //这里实际上是把WEBGL坐标系移动到物体坐标系的原点位置
+            mat4.translate(pwgl.modelViewMatrix, [0.0, 1.1, 0.0], pwgl.modelViewMatrix);
+            uploadModelViewMatrixToShader();
+            drawTable();
+            popModelViewMatrix();
+
+            //开始绘制桌子上面的一个物体
+            pushModelViewMatrix();
+            mat4.translate(pwgl.modelViewMatrix, [0.0, 2.7, 0.0], pwgl.modelViewMatrix);
+            //把原来的立方体2*2*2变换为1*1*1的立方体，相当于把长宽高都缩减为原来的一半
+            mat4.scale(pwgl.modelViewMatrix, [0.5, 0.5, 0.5], pwgl.modelViewMatrix);
+            uploadModelViewMatrixToShader();
+            drawCube(0.0, 0.0, 1.0, 1.0);
+            popModelViewMatrix();
+
+            //在绘制一个图形
+            pushModelViewMatrix();
+            mat4.translate(pwgl.modelViewMatrix, [0.0, 3.7, 0.0], pwgl.modelViewMatrix);
+            mat4.scale(pwgl.modelViewMatrix, [0.5, 0.5, 0.5], pwgl.modelViewMatrix);
+            uploadModelViewMatrixToShader();
+            drawCube(0.0, 1.0, 0.0, 1.0);
+            popModelViewMatrix();
+
+            pushModelViewMatrix();
+            mat4.translate(pwgl.modelViewMatrix, [0.0, 4.7, 0.0], pwgl.modelViewMatrix);
+            mat4.scale(pwgl.modelViewMatrix, [0.5, 0.5, 0.5], pwgl.modelViewMatrix);
+            //mat4.rotateY(modelViewMatrix, yRot, modelViewMatrix);
+            uploadModelViewMatrixToShader();
+            drawCube(1.0, 1.0, 0.0, 1.0);
+            popModelViewMatrix();
+
+            //开始转动场景
+            /*mat4.rotate(modelViewMatrix, xRot, [1, 0, 0], modelViewMatrix);
+            mat4.rotateY(modelViewMatrix, yRot, modelViewMatrix);
+            uploadModelViewMatrixToShader();
+            uploadProjectionMatrixToShader();*/
+
+            pwgl.requestId = requestAnimFrame(draw,canvas);
+
+        }
+
+        //用来处理上下文丢失的情形
+        function handleContextLost(event) {
+            event.preventDefault();
+            cancelRequestAnimFrame(pwgl.requestId);
+
+            // Ignore all ongoing image loads by removing
+            // their onload handler
+            for (var i = 0; i < pwgl.ongoingImageLoads.length; i++) {
+                pwgl.ongoingImageLoads[i].onload = undefined;
+            }
+            pwgl.ongoingImageLoads = [];
+        }
+
+        function handleContextRestored(event) {
+            setupShaders();
+            setupBuffers();
+            setupTextures();
+            gl.clearColor(0.0, 0.0, 0.0, 1.0);
+            gl.enable(gl.DEPTH_TEST);
+            pwgl.requestId = requestAnimFrame(draw,canvas);
+        }
+
+        var lastTime = 0;
+        //实时更新旋转角度
+        function animate() {
+            var timeNow = new Date().getTime();
+            if (lastTime != 0) {
+                var elapsed = timeNow - lastTime;
+
+                xRot += (xSpeed * elapsed) / 1000.0;
+                yRot += (ySpeed * elapsed) / 1000.0;
+            }
+            lastTime = timeNow;
+        }
+
+
+        //不断重绘场景
+        function tick() {
+            requestAnimationFrame(tick);
+            handleKeys();
+            draw();
+            animate();
+        }
+
+        function startup() {
+            canvas = document.getElementById("myGLCanvas");
+            canvas = WebGLDebugUtils.makeLostContextSimulatingContext(canvas);
+            canvas.addEventListener('webglcontextlost', handleContextLost, false);
+            canvas.addEventListener('webglcontextrestored', handleContextRestored, false);
+
+
+
+            setupShaders();
+            setupBuffers();
+            gl.clearColor(1.0, 1.0, 1.0, 1.0);
+
+
+            //逆时针方向是前面
+            gl.frontFace(gl.CW);
+            //激活背面剔除功能
+            gl.enable(gl.CULL_FACE);
+            //WEBGL剔除背面三角形
+            gl.cullFace(gl.FRONT);
+
+            //draw();
+
+            document.onkeydown = handleKeyDown;
+            document.onkeyup = handleKeyUp;
+
+            tick();
+        }
+    </script>
+
+
+</head>
+
+<body onload="startup();">
+<canvas id="myGLCanvas" width="500" height="500" style="border: 2px solid springgreen;"></canvas>
+</body>
+
+</html>

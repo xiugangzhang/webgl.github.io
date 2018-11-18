@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>OBJ Viewer</title>
+</head>
+
+<body onload="main()">
+<canvas id="webgl" width="600" height="600">
+    Please use a browser that supports "canvas"
+</canvas>
+
+<script src="./lib/webgl-utils.js"></script>
+<script src="./lib/webgl-debug.js"></script>
+<script src="./lib/cuon-utils.js"></script>
+<script src="./lib/cuon-matrix.js"></script>
+<script src="ObjViewer2.js"></script>
+
+<!--OBJ文件的原始内容如下-->
+<p>
+    # Blender v2.60 (sub 0) OBJ File: ''
+    # www.blender.org
+    mtllib cube.mtl
+    o Cube
+    v 1.000000 -1.000000 -1.000000
+    v 1.000000 -1.000000 1.000000
+    v -1.000000 -1.000000 1.000000
+    v -1.000000 -1.000000 -1.000000
+    v 1.000000 1.000000 -1.000000
+    v 1.000000 1.000000 1.000001
+    v -1.000000 1.000000 1.000000
+    v -1.000000 1.000000 -1.000000
+    usemtl Material
+    f 1 2 3 4
+    f 5 8 7 6
+    f 2 6 7 3
+    f 3 7 8 4
+    f 5 1 4 8
+    usemtl Material.001
+    f 1 5 6 2
+
+</p>
+<p>
+    # Blender MTL File: ''
+    # Material Count: 2
+    newmtl Material
+    Ka 0.000000 0.000000 0.000000
+    Kd 1.000000 0.000000 0.000000
+    Ks 0.000000 0.000000 0.000000
+    Ns 96.078431
+    Ni 1.000000
+    d 1.000000
+    illum 0
+    newmtl Material.001
+    Ka 0.000000 0.000000 0.000000
+    Kd 1.000000 0.450000 0.000000
+    Ks 0.000000 0.000000 0.000000
+    Ns 96.078431
+    Ni 1.000000
+    d 1.000000
+    illum 0
+
+</p>
+</body>
+</html>
