@@ -1,0 +1,683 @@
+<html lang="zh-CN">
+
+<!--服务器运行地址：http://127.0.0.1:8080/webgl/LearnNeHeWebGL/NeHeWebGL4.html-->
+<head>
+    <title>NeHe's WebGL</title>
+    <meta charset="UTF-8"/>
+    <!--引入需要的库文件-->
+    <script type="text/javascript" src="../lib/Oak3D_v_0_5.js"></script>
+
+    <!--片元着色器；为JavaScript片段指定一个ID编号，后面我可以更具这个ID编号来获取这段片元着色器的JavaScript片段代码-->
+    <script id="shader-fs" type="x-shader/x-fragment">
+    precision mediump float;
+
+    varying vec3 vTextureCoord;
+
+    uniform samplerCube uSampler;
+
+    void main(void) {
+        gl_FragColor = textureCube(uSampler, vTextureCoord);
+    }
+    </script>
+
+    <!--顶点着色器；后面可以通过ID编号来获取这段顶点着色器代码-->
+    <script id="shader-vs" type="x-shader/x-vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aTextureCoord;
+
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+
+    varying vec3 vTextureCoord;
+    void main(void) {
+        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+        vTextureCoord = aTextureCoord;
+    }
+    </script>
+
+
+    <script type="text/javascript">
+
+        var gl;
+        //初始化WEBGL
+        function initGL(canvas) {
+            try {
+                //获取WEBGL上下文
+                gl = canvas.getContext("experimental-webgl");
+                //gl这个上下文中存放了一些属性（canvas的宽度、长度和其他相关属性数据）
+                //设置我的视口的宽度和高度
+                gl.viewportWidth = canvas.width;
+                gl.viewportHeight = canvas.height;
+            } catch (e) {
+            }
+            //如果获取失败
+            if (!gl) {
+                alert("Could not initialise WebGL, sorry :-(");
+            }
+        }
+
+
+        //获取我的着色器对象
+        function getShader(gl, id) {
+            //根据id获取着色器源程序代码
+            var shaderScript = document.getElementById(id);
+            if (!shaderScript) {
+                return null;
+            }
+
+            var str = "";
+            var k = shaderScript.firstChild;
+            while (k) {
+                if (k.nodeType == 3) {
+                    str += k.textContent;
+                }
+                k = k.nextSibling;
+            }
+
+            var shader;
+            //1.根据着色器的类型创建相应的着色器对象
+            if (shaderScript.type == "x-shader/x-fragment") {
+                shader = gl.createShader(gl.FRAGMENT_SHADER);
+            } else if (shaderScript.type == "x-shader/x-vertex") {
+                shader = gl.createShader(gl.VERTEX_SHADER);
+            } else {
+                return null;
+            }
+
+            //2.向着色器对象中指定相应的GLSL ES源代码（以字符串的形式传递进去）
+            gl.shaderSource(shader, str);
+            //3.开始编译着色器（编译成为二进制的可执行文件）
+            gl.compileShader(shader);
+
+            //检查下着色器的状态（是否编译成功）
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                alert(gl.getShaderInfoLog(shader));
+                return null;
+            }
+
+            return shader;
+        }
+
+
+        //一个着色器对象必须包含一个顶点着色器和一个片元着色器
+        var shaderProgram;
+
+        //初始化着色器
+        function initShaders() {
+            //获取我的顶点着色器和片元着色器
+            var fragmentShader = getShader(gl, "shader-fs");
+            var vertexShader = getShader(gl, "shader-vs");
+
+            //每一个program中可以存放一个顶点着色器和一个片元着色器
+            //4.创建我的程序对象
+            shaderProgram = gl.createProgram();
+            //5.为程序对象分配着色器对象
+            gl.attachShader(shaderProgram, vertexShader);
+            gl.attachShader(shaderProgram, fragmentShader);
+
+            //6.链接程序对象
+            /**
+             * 1.可以保证顶点着色器和片元着色器同名并且是同类型的
+             * 2.attribute，uniform和varying变量个数不超过着色器的上限
+             */
+            gl.linkProgram(shaderProgram);
+            //检测是否连接成功
+            if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+                alert("Could not initialise shaders");
+            }
+            //7.告诉WEBGL要使用的程序对象
+            gl.useProgram(shaderProgram);
+
+            //指定一个新的属性；gl.enableVertexAttribArray，我们使用它来告诉WebGL我们会用一个数组来为属性赋值
+            //顶点的位置信息
+            shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+            gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+
+            //获取我的顶点着色器中的attribute纹理坐标参数数据
+            shaderProgram.textureCoordAttribute = gl.getAttribLocation(shaderProgram, "aTextureCoord");
+            gl.enableVertexAttribArray(shaderProgram.textureCoordAttribute);
+
+            //从program中取得另外的两个属性值（模型视图投影矩阵）
+            shaderProgram.pMatrixUniform = gl.getUniformLocation(shaderProgram, "uPMatrix");
+            shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+        }
+
+
+        //定义了我的模型视图矩阵和投影矩阵
+        var mvMatrix;
+        var pMatrix;
+
+        //在这里实现我的矩阵的进栈和出栈操作
+        var mvMatrixStack = [];
+        function myPushMatrix() {
+            var copy = new okMat4();
+            mvMatrix.clone(copy);
+            mvMatrixStack.push(copy);
+        }
+
+        function myPopMatrix() {
+            if (mvMatrixStack.length == 0) {
+                throw "Invalid popMatrix!";
+            }
+            mvMatrix = mvMatrixStack.pop();
+        }
+
+        //把我们新设置的模型视图投影矩阵传给顶点着色器中的uniform变量
+        function setMatrixUniforms() {
+            gl.uniformMatrix4fv(shaderProgram.pMatrixUniform, false, pMatrix.toArray());
+            gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix.toArray());
+        }
+
+
+        //定义我的三角形和矩形缓冲区顶点位置
+        var pyramidVertexPositionBuffer;
+        var cubeVertexPositionBuffer;
+        //定义我的三角形和矩形缓冲区的顶点颜色
+        var pyramidVertexColorBuffer;
+        var cubeVertexTextureCoordBuffer ;
+        //定义我的立方体索引下标
+        var cubeVertexIndexBuffer;
+
+        //缓冲区的初始化
+        function initBuffers() {
+            //1.新建三角形顶点缓冲区对象
+            pyramidVertexPositionBuffer = gl.createBuffer();
+            //2.绑定目标对象到缓冲区
+            gl.bindBuffer(gl.ARRAY_BUFFER, pyramidVertexPositionBuffer);
+            //初始化我的顶点数组
+            var vertices = [
+                // Front face
+                0.0,  1.0,  0.0,
+                -1.0, -1.0,  1.0,
+                1.0, -1.0,  1.0,
+
+                // Right face
+                0.0,  1.0,  0.0,
+                1.0, -1.0,  1.0,
+                1.0, -1.0, -1.0,
+
+                // Back face
+                0.0,  1.0,  0.0,
+                1.0, -1.0, -1.0,
+                -1.0, -1.0, -1.0,
+
+                // Left face
+                0.0,  1.0,  0.0,
+                -1.0, -1.0, -1.0,
+                -1.0, -1.0,  1.0
+            ];
+            //3.缓冲区对象中写入数据
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+
+            //计算顶点数组的大小和顶点个数
+            pyramidVertexPositionBuffer.itemSize = 3;
+            pyramidVertexPositionBuffer.numItems = 12;
+
+            //1.创建我的颜色缓冲区
+            pyramidVertexColorBuffer = gl.createBuffer();
+            //2.绑定我的颜色缓冲区到目标对象
+            gl.bindBuffer(gl.ARRAY_BUFFER, pyramidVertexColorBuffer);
+            //初始化我的颜色数组(对每一个顶点指定相应的颜色)
+            var colors = [
+                //注意保证在同一个顶点上面的颜色要相同
+                // Front face
+                1.0, 0.0, 0.0, 1.0,
+                0.0, 1.0, 0.0, 1.0,
+                0.0, 0.0, 1.0, 1.0,
+
+                // Right face
+                1.0, 0.0, 0.0, 1.0,
+                0.0, 0.0, 1.0, 1.0,
+                0.0, 1.0, 0.0, 1.0,
+
+                // Back face
+                1.0, 0.0, 0.0, 1.0,
+                0.0, 1.0, 0.0, 1.0,
+                0.0, 0.0, 1.0, 1.0,
+
+                // Left face
+                1.0, 0.0, 0.0, 1.0,
+                0.0, 0.0, 1.0, 1.0,
+                0.0, 1.0, 0.0, 1.0
+            ];
+            //3.向缓冲区对象中写入数据
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.STATIC_DRAW);
+            //计算三角形顶点颜色数组的大小和顶点个数
+            pyramidVertexColorBuffer.itemSize = 4;
+            pyramidVertexColorBuffer.numItems = 12;
+
+
+
+            //1.新建矩形顶点缓冲区对象
+            cubeVertexPositionBuffer = gl.createBuffer();
+            //2.绑定目标对象到缓冲区
+            gl.bindBuffer(gl.ARRAY_BUFFER, cubeVertexPositionBuffer);
+            //立方体的顶点位置数组
+            vertices = [
+                // Front face(123第一个三角形， 134第二个三角形)
+                -1.0, -1.0,  1.0,       //左下
+                1.0, -1.0,  1.0,        //右下
+                1.0,  1.0,  1.0,        //右上
+                -1.0,  1.0,  1.0,       //左上
+
+                // Back face
+                -1.0, -1.0, -1.0,
+                -1.0,  1.0, -1.0,
+                1.0,  1.0, -1.0,
+                1.0, -1.0, -1.0,
+
+                // Top face
+                -1.0,  1.0, -1.0,
+                -1.0,  1.0,  1.0,
+                1.0,  1.0,  1.0,
+                1.0,  1.0, -1.0,
+
+                // Bottom face
+                -1.0, -1.0, -1.0,
+                1.0, -1.0, -1.0,
+                1.0, -1.0,  1.0,
+                -1.0, -1.0,  1.0,
+
+                // Right face
+                1.0, -1.0, -1.0,
+                1.0,  1.0, -1.0,
+                1.0,  1.0,  1.0,
+                1.0, -1.0,  1.0,
+
+                // Left face
+                -1.0, -1.0, -1.0,
+                -1.0, -1.0,  1.0,
+                -1.0,  1.0,  1.0,
+                -1.0,  1.0, -1.0
+            ];
+            //3.向缓冲区对象中写入数据
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+            //计算矩形顶点数组每一项数据的大小，和顶点个数（有四个不同的顶点位置，每个顶点由3个数字组成）
+            cubeVertexPositionBuffer.itemSize = 3;
+            cubeVertexPositionBuffer.numItems = 24;
+
+            //1.创建我的立方体的顶点纹理图片缓冲区
+            cubeVertexTextureCoordBuffer  = gl.createBuffer();
+            //2.绑定目标对象到缓冲区
+            gl.bindBuffer(gl.ARRAY_BUFFER, cubeVertexTextureCoordBuffer );
+            //定义我的矩形的颜色数组
+            var textureCoords = [
+                // Front face
+                0.0, 0.0,
+                1.0, 0.0,
+                1.0, 1.0,
+                0.0, 1.0,
+
+                // Back face
+                1.0, 0.0,
+                1.0, 1.0,
+                0.0, 1.0,
+                0.0, 0.0,
+
+                // Top face
+                0.0, 1.0,
+                0.0, 0.0,
+                1.0, 0.0,
+                1.0, 1.0,
+
+                // Bottom face
+                1.0, 1.0,
+                0.0, 1.0,
+                0.0, 0.0,
+                1.0, 0.0,
+
+                // Right face
+                1.0, 0.0,
+                1.0, 1.0,
+                0.0, 1.0,
+                0.0, 0.0,
+
+                // Left face
+                0.0, 0.0,
+                1.0, 0.0,
+                1.0, 1.0,
+                0.0, 1.0,
+            ];
+
+
+            //3.向缓冲区对象中写入数据
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
+            //计算我的正方形的顶点数组
+            cubeVertexTextureCoordBuffer .itemSize = 2;
+            cubeVertexTextureCoordBuffer .numItems = 24;
+
+
+            //开始定义我的顶点位置数组
+            //1.创建我的顶点索引缓冲区对象
+            cubeVertexIndexBuffer = gl.createBuffer();
+            //2.绑定目标对象到缓冲区
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cubeVertexIndexBuffer);
+            //设置我的顶点索引数组
+            var cubeVertexIndices = [
+                0, 1, 2,      0, 2, 3,    // Front face
+                4, 5, 6,      4, 6, 7,    // Back face
+                8, 9, 10,     8, 10, 11,  // Top face
+                12, 13, 14,   12, 14, 15, // Bottom face
+                16, 17, 18,   16, 18, 19, // Right face
+                20, 21, 22,   20, 22, 23  // Left face
+            ];
+            //3.向缓冲区对象写入数据
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(cubeVertexIndices), gl.STATIC_DRAW);
+            //计算我的顶点索引数组的大小(每一项数据的大小，总共36个数据)
+            /**
+             * 1个不同的顶点位置（numItems），每个顶点由36个数字组成（itemSize）
+             * @type {number}
+             */
+            cubeVertexIndexBuffer.itemSize = 1;
+            cubeVertexIndexBuffer.numItems = 36;
+        }
+
+
+        //定义我的三角形和我的矩形的初始旋转角度
+        var rPyramid = 0;
+        var rCube = 0;
+
+        //初始化我的锥形和立方体的旋转变量
+        var xRot = 0;
+        var xSpeed = 0;
+
+        var yRot = 0;
+        var ySpeed = 0;
+
+        var z = -8.0;
+        //指定纹理过滤的方式
+        var filter = 0;
+
+
+
+        //绘制我的场景（三角形和矩形）
+        function drawScene() {
+            //设置视口大小
+            gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+            //清空颜色缓存和深度缓存
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+            //建立一个透视投影（视场角，视口比例，最近，最远距离）
+            pMatrix = okMat4Proj(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0);
+            //alert('width:'+gl.viewportWidth+'height:'+gl.viewportHeight); 500 500
+            //pMatrix = okMat4Proj(45, 500/500, 0.1, 100.0);
+
+            //新建一个模型视图矩阵
+            mvMatrix = new okMat4();
+            //保存矩阵的初始状态
+            myPushMatrix();
+
+
+            //设置我的模型视图矩阵为平移矩阵
+            //mvMatrix = okMat4Trans(-1.5, 0.0, -7.0);
+            mvMatrix.translate(OAK.SPACE_WORLD, -1.5, 0.0, z, true);
+            //三角形的椎体绕着Y轴旋转(本地坐标系旋转)
+            //mvMatrix.rotY(OAK.SPACE_LOCAL, rPyramid, true);
+            mvMatrix.rotX(OAK.SPACE_LOCAL, xRot, true);
+            mvMatrix.rotY(OAK.SPACE_LOCAL, yRot, true);
+
+
+            //1.绑定三角形顶点数据到缓冲区对象
+            gl.bindBuffer(gl.ARRAY_BUFFER, pyramidVertexPositionBuffer);
+            gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, pyramidVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+            //2.绑定三角形颜色信息到缓冲区对象,并且传递给顶点着色器
+            gl.bindBuffer(gl.ARRAY_BUFFER, pyramidVertexColorBuffer);
+            gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, pyramidVertexColorBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+
+
+            //告诉WEBGL当前使用的模型视图投影矩阵
+            setMatrixUniforms();
+            //开始绘制三角形（从第0个位置开始，绘制numItems个顶点）
+            gl.drawArrays(gl.TRIANGLES, 0, pyramidVertexPositionBuffer.numItems);
+            //绘制完毕后再次恢复我的模型视图矩阵
+            myPopMatrix();
+
+
+            //再次保存我的模型视图矩阵
+            myPushMatrix();
+            //开始绘制立方体
+            mvMatrix.translate(OAK.SPACE_WORLD, 1.5, 0.0, z, true);
+            //让我的矩形绕着XYZ轴旋转
+            //mvMatrix.rotX(OAK.SPACE_LOCAL, rCube, true);
+            //mvMatrix.rot(OAK.SPACE_LOCAL, rCube, 1.0, 1.0, 1.0, true);
+            mvMatrix.rotX(OAK.SPACE_LOCAL, xRot, true);
+            mvMatrix.rotY(OAK.SPACE_LOCAL, yRot, true);
+
+
+            //绑定四边形的顶点信息（与索引下标绑定在一起）
+            gl.bindBuffer(gl.ARRAY_BUFFER, cubeVertexPositionBuffer);
+            gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, cubeVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+            //开始传递顶点的纹理数据
+            gl.bindBuffer(gl.ARRAY_BUFFER, cubeVertexTextureCoordBuffer );
+            gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, cubeVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+            //开始使用我的纹理图片来绘制我的立方体(在绘制之前使用这个函数drawElemenets());从TEXTURE0到TEXTURE31
+            gl.activeTexture(gl.TEXTURE0);
+
+            //告诉WEBGL要使用的纹理图片(0 1 2 )
+            //gl.bindTexture(gl.TEXTURE_2D, neheTexture);
+            gl.bindTexture(gl.TEXTURE_2D, createTextures[filter]);
+            //将0这个值推送到着色器的uniform变量中
+            gl.uniform1i(shaderProgram.samplerUniform, 0);
+
+
+            //开始绑定索引下标信息
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cubeVertexIndexBuffer);
+            setMatrixUniforms();
+            //开始绘制立方体
+            //gl.drawArrays(gl.TRIANGLE_STRIP, 0, cubeVertexPositionBuffer.numItems);
+            gl.drawElements(gl.TRIANGLES, cubeVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+
+            //绘制完毕后，恢复我的模型视图矩阵的初始状态
+            myPopMatrix();
+        }
+
+
+        //实现我的载入图片的功能
+        function handleLoadedTexture(textures) {
+            for (var i=0; i<textures.length; i++){
+                console.log(textures.length+' '+textures[i].image.src);
+            }
+
+            //更正图形坐标
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+
+            textureObject = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_CUBE_MAP, textureObject);
+
+
+            //立方图纹理需要设置六个方位上的纹理，为了方便区分，我设置了六个不同的纹理图像
+            gl.texImage2D(gl.TEXTURE_CUBE_MAP_POSITIVE_X, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, textures[0].image);
+            gl.texImage2D(gl.TEXTURE_CUBE_MAP_NEGATIVE_X, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, textures[1].image);
+            gl.texImage2D(gl.TEXTURE_CUBE_MAP_POSITIVE_Y, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, textures[2].image);
+            gl.texImage2D(gl.TEXTURE_CUBE_MAP_NEGATIVE_Y, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, textures[3].image);
+            gl.texImage2D(gl.TEXTURE_CUBE_MAP_POSITIVE_Z, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, textures[4].image);
+            gl.texImage2D(gl.TEXTURE_CUBE_MAP_NEGATIVE_Z, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, textures[5].image);
+            gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+
+
+            //指定要使用的纹理对象，并且指定了三种不同的纹理过滤方式
+            /*gl.bindTexture(gl.TEXTURE_2D, textures[0]);
+            //Nearest（最近点采样过滤）
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textures[0].image);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+
+            //Linear（线性过滤），我们在放大缩小时还是使用同样的过滤方式
+            gl.bindTexture(gl.TEXTURE_2D, textures[1]);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textures[1].image);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+
+            //Mipmaps（多级渐进纹理过滤）
+            gl.bindTexture(gl.TEXTURE_2D, textures[2]);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textures[2].image);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+            //告诉WebGL为当前活动纹理生成对应的一系列MipMap层
+            gl.generateMipmap(gl.TEXTURE_2D);*/
+
+            //清空当前纹理
+            gl.bindTexture(gl.TEXTURE_2D, null);
+        }
+
+        //实现我的初始化纹理图片
+        var createTextures = Array();
+        //创建一个数组，这个数组中包含三个纹理对象
+        function initTexture() {
+            //实现我的初始化纹理图片
+            var createTextures = Array();
+            //把我的所有图片放在一个数组中
+            var images = [
+                '../resources/cube/01.bmp',
+                '../resources/cube/02.bmp',
+                '../resources/cube/03.bmp',
+                '../resources/cube/04.bmp',
+                '../resources/cube/05.bmp',
+                '../resources/cube/06.bmp'
+            ];
+
+            //设置图片的纹理地址
+            for (var i = 0; i < 6; i++) {
+                var createImage = new Image();
+                createImage.src = images[i];
+
+                var texture = gl.createTexture();
+                texture.image = createImage;
+
+                //向数组中存放数据
+                createTextures.push(texture);
+                gl.bindTexture(gl.TEXTURE_CUBE_MAP, createTextures[i]);
+
+                createImage.onload = function () {
+                    handleLoadedTexture(createTextures);
+                }
+
+            }
+        }
+
+
+        //这里是我的主函数
+        function webGLStart() {
+            //获取canvas元素
+            var canvas = document.getElementById("lesson01-canvas");
+
+            //初始化WEBGL上下文信息
+            initGL(canvas);
+
+            //初始化着色器
+            initShaders();
+
+            //初始化缓冲区对象
+            initBuffers();
+
+            //初始化纹理图片
+            initTexture();
+
+            //指定清空画布的颜色，开启隐藏面消除的功能
+            gl.clearColor(0.0, 0.0, 0.0, 1.0);
+            gl.enable(gl.DEPTH_TEST);
+
+
+            //添加按键控制的功能
+            document.onkeydown = handleKeyDown;
+            document.onkeyup = handleKeyUp;
+
+
+            //开始绘制我的场景
+            //drawScene();
+            //开始使用动画效果来绘制我的图形
+            tick();
+        }
+
+        //按键控制函数
+        var currentPressKeys = {};
+        function handleKeyDown(event) {
+            //把当前的按下的按键键值缓存下来
+            currentPressKeys[event.keyCode] = true;
+
+            //开始循环切换纹理滤镜
+            if (String.fromCharCode(event.keyCode) == 'F'){
+                filter +=1;
+                if (filter == 3){
+                    filter = 0;
+                }
+            }
+        }
+        function handleKeyUp() {
+            currentPressKeys[event.keyCode] = false;
+        }
+
+        //根据不同按键做出不同的反应
+        function handleKeys() {
+            if (currentPressKeys[33]) {
+                // Page Up
+                z -= 0.05;
+            }
+            if (currentPressKeys[34]) {
+                // Page Down
+                z += 0.05;
+            }
+            if (currentPressKeys[37]) {
+                // Left cursor key
+                ySpeed -= 1;
+            }
+            if (currentPressKeys[39]) {
+                // Right cursor key
+                ySpeed += 1;
+            }
+            if (currentPressKeys[38]) {
+                // Up cursor key
+                xSpeed -= 1;
+            }
+            if (currentPressKeys[40]) {
+                // Down cursor key
+                xSpeed += 1;
+            }
+        }
+
+
+        //实现我的动画绘制函数
+        function tick() {
+            //重复调用tick函数
+            okRequestAnimationFrame(tick);
+
+            //处理按下的按键
+            handleKeys();
+
+            //开始绘制场景
+            drawScene();
+
+            //改变我的三角形和我的矩阵的旋转角度
+            animate();
+        }
+
+
+        //开始不断修改我的旋转角度
+        var lastTime = 0;
+        function animate() {
+            var timeNow = new Date().getTime();
+            if (lastTime != 0) {
+                var elapsed = timeNow - lastTime;
+
+                //三角形 90/s， 矩形 75/s
+                xRot += (xSpeed * elapsed) / 1000.0;
+                yRot += (ySpeed * elapsed) / 1000.0;
+            }
+            lastTime = timeNow;
+        }
+
+    </script>
+
+
+</head>
+
+<body onload="webGLStart();">
+<canvas id="lesson01-canvas" style="border: none;" width="700" height="700"></canvas>
+</body>
+
+</html>

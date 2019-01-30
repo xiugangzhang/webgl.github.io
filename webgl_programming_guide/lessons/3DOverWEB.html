@@ -1,0 +1,29 @@
+<!--WEBGL编程-->
+<!DOCTYPE html>
+<!--这里的lang="en"可以删除，如果不删除的，用谷歌之类打开，它会认为是英文的，会自动给翻译（如果设置了自动翻译的话）-->
+<html lang="en">
+<head>
+    <!--设置子字符集-->
+    <meta charset="utf-8"/>
+    <!--设置标题-->
+    <title>This is My First WebGL program</title>
+</head>
+<!--窗口加载完毕之后去调用我的main函数-->
+<body onload="main()">
+<!--定义一个canvas画布-->
+<canvas id="webgl" width="500" height="500">
+    Please use a WebBroswer that supports "canvas"
+</canvas>
+<!--这里显示正摄投影中的near和far的数值-->
+<p id="nearFar">The near and far values are displayed here.</p>
+
+
+<!--WebGL辅助函数(这里的库函数是放在我的服务器上面的)-->
+<script src="../lib/webgl-utils.js"></script>
+<script src="../lib/webgl-debug.js"></script>
+<script src="../lib/cuon-utils.js"></script>
+<script src="../lib/cuon-matrix.js"></script>
+<script src="../lib/webgl-debug.js"></script>
+<script src="../js/3DOverWEB.js"></script>
+</body>
+</html>

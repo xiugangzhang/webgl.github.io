@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>WEBGL高级编程</title>
+    <script type="text/javascript">
+        //定义需要用的全局变量
+        var canvas;
+        var gl;
+        var shaderProgram;
+        var vertexBuffer;
+
+        //创建我的上下文句柄
+        function createGLContext() {
+            //指定WEBGL系统的名字数组
+            var names = ["webgl", "experimental-webgl"];
+            var context = null;
+            for (var i=0; i<names.length; i++){
+                try {
+                    //设置我的上下文句柄
+                    context = canvas.getContext(names[i]);
+                } catch (e) {
+
+                }
+                //如果获取成功，就退出
+                if (context){
+                    break ;
+                }
+            }
+            //设置我的上下文信息
+            if (context) {
+                //设置我的视口的大小
+                context.viewportWidth = canvas.width;
+                context.viewportHeight = canvas.height;
+            } else {
+                alert("Failed to create WEBGL context!");
+            }
+            //把当前的上下文信息返回出去
+            return context;
+        }
+
+        //加载我的着色器
+        function loadShader(type, shaderSource) {
+            //1.创建着色器
+            var shader = gl.createShader(type);
+            //2.获取着色器源码
+            gl.shaderSource(shader, shaderSource);
+            //3.编译着色器
+            gl.compileShader(shader);
+
+            //判断编译是否成功
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)){
+                //编译失败就删除着色器
+                alert("Error compiling shader"+ gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            //返回我的着色器
+            return shader;
+        }
+
+        //创建我的顶点着色器和片元着色器
+        function setupShaders() {
+            //顶点着色器
+            var vertexShaderSource =
+                "attribute vec3 aVertexPosition;                 \n" +
+                "void main() {                                   \n" +
+                "  gl_Position = vec4(aVertexPosition, 1.0);     \n" +
+                "}                                               \n";
+
+            //片元着色器
+            var fragmentShaderSource =
+                "precision mediump float;                    \n" +
+                "void main() {                               \n" +
+                "  gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);  \n" +
+                "}                                            \n";
+
+            //把我的着色器代码载入编译器并且编译
+            var vertexShader = loadShader(gl.VERTEX_SHADER, vertexShaderSource);
+            var fragmentShader = loadShader(gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+            //把当前的着色器附加到我的程序实例中去
+            shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, vertexShader);
+            gl.attachShader(shaderProgram, fragmentShader);
+            //链接程序实例
+            gl.linkProgram(shaderProgram);
+
+            //判断是否链接成功
+            if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)){
+                alert("Failed to sertup shaders");
+            }
+
+            //使用当前的程序实例（一个程序实例包含一个顶点着色器和一个片元着色器）
+            gl.useProgram(shaderProgram);
+
+            //获取我的顶点着色器中的（顶点位置的）程序实例
+            shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+        }
+
+        //设置我的顶点缓冲器
+        function setupBuffers() {
+            //1.创建顶点缓冲区对象
+            vertexBuffer = gl.createBuffer();
+            //2.绑定缓冲区到目标对象
+            gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+            //设置我的顶点数组
+            var triangleVertices = [
+                0.0, 0.5, 0.0,
+                -0.5, -0.5, 0.0,
+                0.5, -0.5, 0.0
+            ];
+            //3.向缓冲区对象中写入数据
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(triangleVertices), gl.STATIC_DRAW);
+            vertexBuffer.itemSize = 3;
+            vertexBuffer.numberOfItems = 3;
+        }
+
+        //这里是我的主绘制函数
+        function draw() {
+            //设置视口
+            gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+            //用指定的颜色清空画布
+            gl.clear(gl.COLOR_BUFFER_BIT);
+
+            //把当前的顶点数据写入到顶点着色器
+            gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, vertexBuffer.itemSize, gl.FLOAT, false, 0, 0);
+            //正式启动顶点着色器与缓冲区之间的联系(顶点的位置)
+            gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+
+            //开始绘制
+            gl.drawArrays(gl.TRIANGLES, 0, vertexBuffer.numberOfItems);
+        }
+
+
+        //主函数
+        function startup() {
+            //获取画布
+            canvas = document.getElementById("myGLCanvas");
+            //获取上下文句柄
+            gl = createGLContext();
+            //创建着色器
+            setupShaders();
+            //创建缓冲区
+            setupBuffers();
+            //指定清空画布的颜色
+            gl.clearColor(0.0, 0.0, 0.0, 1.0);
+            //开始绘制场景
+            draw();
+        }
+    </script>
+</head>
+<body onload="startup()">
+<canvas id="myGLCanvas" width="500" height="500" style="border: 2px solid springgreen;"></canvas>
+</body>
+</html>
