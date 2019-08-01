@@ -1,13 +1,5 @@
-* Getting started
+* 便签
+  * [首页](https://xiugangzhang.github.io/webgl.github.io/#/)
 
-  * [Quick start](quickstart.md)
-  * [Writing more pages](more-pages.md)
-  * [Custom navbar](custom-navbar.md)
-  * [Cover page](cover.md)
-
-* Configuration
-  * [Configuration](configuration.md)
-  * [Themes](themes.md)
-  * [Using plugins](plugins.md)
-  * [Markdown configuration](markdown.md)
-  * [Language highlight](language-highlight.md)
+* 首页
+  * [个人网站](http://www.52tech.tech)
